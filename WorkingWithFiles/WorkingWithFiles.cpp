@@ -246,7 +246,7 @@ int main(int argc, char* argv[])
     fstream target;
     char o_byte[1];
 
-    cout << "Read " << to_patch->patch_count << " patches." << endl << endl << "Beginning patching Process" << endl;
+    cout << "Read " << std::dec << to_patch->patch_count << " patches." << endl << endl << "Beginning patching Process" << endl;
 
     target.open(to_patch->PE_Name, std::ios_base::binary | std::ios_base::out | std::ios_base::in);
     if (!target.is_open()) {
