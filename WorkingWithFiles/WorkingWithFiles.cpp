@@ -231,7 +231,10 @@ int main(int argc, char* argv[])
 
     //attempt to open in file
     if (!argv[1]) {
-        cout << "Usage: UniPatch.exe <1337_file_path>";
+        cout << "Usage: UniPatch.exe <1337_file_path> [options]" << endl 
+                << "\t-b\tBackup Target" << endl
+                << "\t-r\tTreat addresses as file offsets" << endl
+                << "\t-f\tForce patch" << endl;
         return -1;
     }
     PE_Stuff* to_patch = new PE_Stuff;
@@ -248,6 +251,9 @@ int main(int argc, char* argv[])
 
     cout << "Read " << std::dec << to_patch->patch_count << " patches." << endl << endl << "Beginning patching Process" << endl;
 
+    if (inArgs(argv, argc, "-b")) {
+        CopyFileA(to_patch->PE_Name.c_str(),(to_patch->PE_Name + ".bak").c_str(), false);
+    }
     target.open(to_patch->PE_Name, std::ios_base::binary | std::ios_base::out | std::ios_base::in);
     if (!target.is_open()) {
         cout << "Unable to open target: " << to_patch->PE_Name << endl;
