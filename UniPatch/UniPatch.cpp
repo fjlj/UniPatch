@@ -229,14 +229,18 @@ void read1337(PE_Stuff *patch_info, char* argv[], int argc) {
 int main(int argc, char* argv[])
 {
 
-    //attempt to open in file
-    if (!argv[1]) {
-        cout << "Usage: UniPatch.exe <1337_file_path> [options]" << endl 
-                << "\t-nb\tDO NOT Backup Target" << endl
-                << "\t-r\tTreat addresses as file offsets" << endl
-                << "\t-f\tForce patch" << endl;
+    
+    //TODO: implement loader mode...
+    if (argc < 2 || inArgs(argv,argc,"-h")) {
+        cout << "Usage: UniPatch.exe <1337_file_path> [options]" << endl
+            << "\t-h\tDisplay this help screen" << endl
+            << "\t-nb\tDo not Backup Target" << endl
+            << "\t-r\tTreat addresses as file offsets" << endl
+            << "\t-f\tForce patch" << endl
+            << "\t-l\tLoader Mode: patch bytes in memory after launching target" << endl;
         return -1;
     }
+    //attempt to open in file
     PE_Stuff* to_patch = new PE_Stuff;
     read1337(to_patch,argv,argc);
     
