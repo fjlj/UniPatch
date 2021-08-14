@@ -14,6 +14,8 @@
 #include <fstream>
 #include <string>
 
+#define SSUSP 0x00000004
+
 using namespace std;
 
 UINT64 rvaToPa(UINT64 offsetRVA, PIMAGE_NT_HEADERS peHeader, LPVOID lpFileBase) {
@@ -134,7 +136,7 @@ void read1337(PE_Stuff *patch_info, char* argv[], int argc) {
         else {
             //get the target PE name from the 1337 file
             patch_info->PE_Name = lineRead.substr(1, lineRead.length());
-            cout << "Patching File: " << patch_info->PE_Name << endl;
+            cout << "Target File: " << patch_info->PE_Name << endl;
             if (!inArgs(argv, argc, "-r")) {
 
                 cout << "Processing .1337 file RVA offsets, USE -r to treat addresses as file offsets." << endl;
@@ -229,21 +231,21 @@ void read1337(PE_Stuff *patch_info, char* argv[], int argc) {
 int main(int argc, char* argv[])
 {
 
-    
+
     //TODO: implement loader mode...
-    if (argc < 2 || inArgs(argv,argc,"-h")) {
+    if (argc < 2 || inArgs(argv, argc, "-h")) {
         cout << "Usage: UniPatch.exe <1337_file_path> [options]" << endl
             << "\t-h\tDisplay this help screen" << endl
             << "\t-nb\tDo not Backup Target" << endl
             << "\t-r\tTreat addresses as file offsets" << endl
             << "\t-f\tForce patch" << endl
-            << "\t-l\tLoader Mode: patch bytes in memory after launching target" << endl;
+            << "\t-l\tLoader Mode: patch bytes in memory after launching target (implies -nb)" << endl;
         return -1;
     }
-    //attempt to open in file
+    //attempt to open and read 1337 file
     PE_Stuff* to_patch = new PE_Stuff;
-    read1337(to_patch,argv,argc);
-    
+    read1337(to_patch, argv, argc);
+
     if (to_patch->error) {
         delete to_patch;
         return -1;
@@ -255,44 +257,105 @@ int main(int argc, char* argv[])
 
     cout << "Read " << std::dec << to_patch->patch_count << " patches." << endl << endl << "Beginning patching Process" << endl;
 
-    if (!inArgs(argv, argc, "-nb")) {
-        CopyFileA(to_patch->PE_Name.c_str(),(to_patch->PE_Name + ".bak").c_str(), false);
-    }
-    target.open(to_patch->PE_Name, std::ios_base::binary | std::ios_base::out | std::ios_base::in);
-    if (!target.is_open()) {
-        cout << "Unable to open target: " << to_patch->PE_Name << endl;
-        delete to_patch;
-        return -1;
+    if (!inArgs(argv, argc, "-nb") && !inArgs(argv, argc, "-l")) {
+        CopyFileA(to_patch->PE_Name.c_str(), (to_patch->PE_Name + ".bak").c_str(), false);
     }
 
-    for (int p = 0; p < to_patch->patch_count; p++) {
-        
-        cout << "Address: 0x" << std::hex << (0xFFFFFFFFFFFFFFFF & to_patch->file_offset[p]) << " Patch: 0x" << std::hex << (0xFF & to_patch->org_byte[p]) << "->0x" << std::hex << (0xFF & to_patch->rep_byte[p]) << endl;
-
-        target.seekg(to_patch->file_offset[p]);
-        target.read(o_byte, 1);
-        cout << "Read byte: 0x" << std::hex << (0xFF & o_byte[0]) << endl;
-
-        if (o_byte[0] != (char)to_patch->org_byte[p] && !inArgs(argv,argc,"-f")) {
-            cout << "Original byte mismatch, perhaps already patched, or version differs, use -f to force patching. " << endl;
+    if (!inArgs(argv, argc, "-l")) {
+        //open target file
+        target.open(to_patch->PE_Name, std::ios_base::binary | std::ios_base::out | std::ios_base::in);
+        if (!target.is_open()) {
+            cout << "Unable to open target: " << to_patch->PE_Name << endl;
             delete to_patch;
             return -1;
         }
 
-        target.seekp(to_patch->file_offset[p]);
-        o_byte[0] = (char)to_patch->rep_byte[p];
-        target.write(o_byte, 1);
+        //apply patches to binary file
+        for (int p = 0; p < to_patch->patch_count; p++) {
 
-        target.seekg(to_patch->file_offset[p]);
-        target.read(o_byte, 1);
-        cout << "Wrote byte: 0x" << std::hex << (0xFF & o_byte[0]) << endl << endl;
+            cout << "Address: 0x" << std::hex << (0xFFFFFFFFFFFFFFFF & to_patch->file_offset[p])
+                << " Patch: 0x" << std::hex << (0xFF & to_patch->org_byte[p]) << "->0x" << std::hex << (0xFF & to_patch->rep_byte[p]) << endl;
+
+            //read the original byte from file
+            target.seekg(to_patch->file_offset[p]);
+            target.read(o_byte, 1);
+            cout << "Read byte: 0x" << std::hex << (0xFF & o_byte[0]) << endl;
+
+            //error if the original byte does not match expected byte, unless -f flag specified
+            if (o_byte[0] != (char)to_patch->org_byte[p] && !inArgs(argv, argc, "-f")) {
+                cout << "Original byte mismatch, perhaps already patched, or version differs, use -f to force patching. " << endl;
+                delete to_patch;
+                return -1;
+            }
+
+            //patch the original byte with the new byte
+            target.seekp(to_patch->file_offset[p]);
+            o_byte[0] = (char)to_patch->rep_byte[p];
+            target.write(o_byte, 1);
+
+            //read the new byte from file to confirm written successfully
+            target.seekg(to_patch->file_offset[p]);
+            target.read(o_byte, 1);
+            cout << "Wrote byte: 0x" << std::hex << (0xFF & o_byte[0]) << endl << endl;
+        }
+
+        cout << "Patch complete!!!" << endl;
+
+        //close files.
+        if (target.is_open())
+            target.close();
+
     }
+    else {
+        //loader mode  (untested, likely need to provide translation for addresses to current running memory address offsets...)
+        wstring target_name(to_patch->PE_Name.begin(), to_patch->PE_Name.end());
 
-    cout << "Patch complete!!!" << endl;
+        //launch target as suspended process
+        STARTUPINFO sinfo; 
+        PROCESS_INFORMATION pinfo;
+        memset(&sinfo, 0, sizeof(STARTUPINFO));
+        memset(&pinfo, 0, sizeof(PROCESS_INFORMATION));
+        sinfo.cb = sizeof(STARTUPINFO);
+        DWORD oldProt;
+        size_t w_bytes;
+        int w_count = 100;
+        
+        if (CreateProcessW(0, (LPWSTR)target_name.c_str(), 0, 0, 0, SSUSP, 0, 0, &sinfo, &pinfo) == 0) {
+            cout << "Unable to open target: " << to_patch->PE_Name << endl;
+            delete to_patch;
+            return -1;
+        }
 
-    //close files.
-    if(target.is_open())
-        target.close();
+        ResumeThread(pinfo.hThread);
+
+        for (int p = 0; p < to_patch->patch_count; p++) {
+            cout << "Address: 0x" << std::hex << (0xFFFFFFFFFFFFFFFF & to_patch->file_offset[p])
+                << " Patch: 0x" << std::hex << (0xFF & to_patch->org_byte[p]) << "->0x" << std::hex << (0xFF & to_patch->rep_byte[p]) << endl;
+
+            VirtualProtect((LPVOID)to_patch->file_offset[p], 0x01, PAGE_EXECUTE_READWRITE, &oldProt);
+            o_byte[0] = -1;
+            w_count = 100;
+            while (o_byte[0] != (char)to_patch->org_byte[p] && w_count > 0) {
+                ReadProcessMemory(pinfo.hProcess, (LPCVOID)to_patch->file_offset[p], &o_byte, 1, &w_bytes);
+                w_count--;
+                Sleep(10);
+            }
+
+            if (o_byte[0] != (char)to_patch->org_byte[p] && !inArgs(argv,argc,"-f")) {
+                cout << "Original byte: " << std::hex << (0xFF & to_patch->org_byte[p]) << " not found at address: " << std::hex << (0xFFFFFFFFFFFFFFFF & to_patch->file_offset[p]) << endl;
+                delete to_patch;
+                return -1;
+            }
+
+            o_byte[0] = (char)to_patch->rep_byte[p];
+            WriteProcessMemory(pinfo.hProcess, (LPVOID)to_patch->file_offset[p], &o_byte, 1, &w_bytes);
+
+            VirtualProtect((LPVOID)to_patch->file_offset[p], 0x01, oldProt, &oldProt);
+
+        }
+
+
+    }
 
     cout << "Cleaning up..." << endl;
     delete to_patch;
