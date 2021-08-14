@@ -5,6 +5,8 @@
 // or plainly the wrong file all together.. due to the nature of patch files primarily being supplied for PE files...
 // we load the PE and convert the Relative Virtual Addresses(supplied by x64dbg on export) to Physical File Offsets(PFO)
 // for patching.. This can be overriden with -r if the supplied addresses happen to already be file offsets.
+// -l for loader mode.. will load the target suspended, grab the base address, add the RVA to the base and patch the memory
+// of the process at the given RVA in 1337 file.
 // 
 // Frank Lewis - fjlj - 08/01/2021
 
@@ -13,12 +15,14 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <Psapi.h>
+#include <tlhelp32.h> 
 
 #define SSUSP 0x00000004
 
 using namespace std;
 
-UINT64 rvaToPa(UINT64 offsetRVA, PIMAGE_NT_HEADERS peHeader, LPVOID lpFileBase) {
+UINT64 rvaToPa(UINT64 offsetRVA, PIMAGE_NT_HEADERS peHeader, LPVOID lpFileBase, bool loader_mode=false) {
     PIMAGE_SECTION_HEADER sectionHeader = IMAGE_FIRST_SECTION(peHeader);
     UINT64 nSectionCount = peHeader->FileHeader.NumberOfSections;
     UINT64 i = 0;
@@ -112,7 +116,7 @@ void read1337(PE_Stuff *patch_info, char* argv[], int argc) {
             conv_me >> patch_info->rep_byte[tmp_patch_count];
             conv_me.clear();
 
-            if (!inArgs(argv, argc, "-r") && peHeader != NULL && lpFileBase != NULL) {
+            if (!inArgs(argv, argc, "-r") && !inArgs(argv, argc, "-l") && peHeader != NULL && lpFileBase != NULL) {
                 patch_info->file_offset[tmp_patch_count] = rvaToPa(patch_info->rva_offset[tmp_patch_count], peHeader, lpFileBase);
             }
             else
@@ -120,9 +124,12 @@ void read1337(PE_Stuff *patch_info, char* argv[], int argc) {
                 patch_info->file_offset[tmp_patch_count] = patch_info->rva_offset[tmp_patch_count];
             }
             //check that the RVA was found, converted to PFO, and we got the correct bytes for the patching
-            if(!inArgs(argv, argc, "-r"))
-                cout << "RVA: 0x" << std::hex << patch_info->rva_offset[tmp_patch_count] << " -> ";
-            cout << "PFO: 0x" << std::hex << patch_info->file_offset[tmp_patch_count];
+            if (!inArgs(argv, argc, "-r")) {
+                cout << "RVA: 0x" << std::hex << patch_info->rva_offset[tmp_patch_count];
+                if (!inArgs(argv, argc, "-l"))cout << " --> ";
+            }
+            if (!inArgs(argv, argc, "-l"))
+                cout << "PFO: 0x" << std::hex << patch_info->file_offset[tmp_patch_count];
             cout << " Patch: 0x" << std::hex << patch_info->org_byte[tmp_patch_count] << "->" << "0x" << std::hex << patch_info->rep_byte[tmp_patch_count] << endl;
 
             tmp_patch_count++;
@@ -227,19 +234,77 @@ void read1337(PE_Stuff *patch_info, char* argv[], int argc) {
     return;
 }
 
+void downcase(WCHAR* str) {
+    for (int i = 0; str[i] != '\0'; i+=2) {
+        if (str[i] >= 0x41 && str[i] <= 0x5A) {
+            str[i] = str[i] + 0x20;
+        }
+    }
+}
+
+UINT64 GetBaseAddress(DWORD dwPID, WCHAR* name)
+{
+    HANDLE hModuleSnap = INVALID_HANDLE_VALUE;
+    MODULEENTRY32 me32;
+    WCHAR name2[128];
+    wcscpy_s(name2, name);
+    downcase(name2);
+    int attempts = 0;
+
+    while (hModuleSnap == INVALID_HANDLE_VALUE && attempts < 2000) {
+        hModuleSnap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, dwPID);
+        Sleep(1);
+        attempts++;
+    }
+    if (hModuleSnap == INVALID_HANDLE_VALUE || hModuleSnap == 0)
+    {
+        cout << "Failed to create snapshot of process modules..." << endl;
+        return 0;
+    }
+    else 
+    {
+        attempts = 0;
+    }
+
+    me32.dwSize = sizeof(MODULEENTRY32);
+
+
+    while (!Module32First(hModuleSnap, &me32) && attempts < 2000) {
+        Sleep(1);
+        attempts++;
+    }
+
+    if (!Module32First(hModuleSnap, &me32))
+    {
+        cout << "Failed to read modules of process..." << endl;
+        CloseHandle(hModuleSnap);
+        return 0;
+    }
+
+    do
+    {
+        downcase(me32.szModule);
+        if (wcsstr(me32.szModule, name2)) return((UINT64)me32.modBaseAddr);
+    } while (Module32Next(hModuleSnap, &me32));
+    
+    if(hModuleSnap != INVALID_HANDLE_VALUE && hModuleSnap != 0)
+        CloseHandle(hModuleSnap);
+    
+    return 0;
+}
 
 int main(int argc, char* argv[])
 {
 
 
-    //TODO: implement loader mode...
+    //TODO: update loader mode to take a processname (in the case that the target is a dll used by X process)
     if (argc < 2 || inArgs(argv, argc, "-h")) {
         cout << "Usage: UniPatch.exe <1337_file_path> [options]" << endl
             << "\t-h\tDisplay this help screen" << endl
             << "\t-nb\tDo not Backup Target" << endl
             << "\t-r\tTreat addresses as file offsets" << endl
             << "\t-f\tForce patch" << endl
-            << "\t-l\tLoader Mode: patch bytes in memory after launching target (implies -nb)" << endl;
+            << "\t-l\tLoader Mode: patch bytes in memory(no file modification) after launching target (implies -nb)" << endl;
         return -1;
     }
     //attempt to open and read 1337 file
@@ -257,12 +322,13 @@ int main(int argc, char* argv[])
 
     cout << "Read " << std::dec << to_patch->patch_count << " patches." << endl << endl << "Beginning patching Process" << endl;
 
-    if (!inArgs(argv, argc, "-nb") && !inArgs(argv, argc, "-l")) {
-        CopyFileA(to_patch->PE_Name.c_str(), (to_patch->PE_Name + ".bak").c_str(), false);
-    }
-
     if (!inArgs(argv, argc, "-l")) {
         //open target file
+
+        if (!inArgs(argv, argc, "-nb")) {
+            CopyFileA(to_patch->PE_Name.c_str(), (to_patch->PE_Name + ".UniBak").c_str(), false);
+        }
+
         target.open(to_patch->PE_Name, std::ios_base::binary | std::ios_base::out | std::ios_base::in);
         if (!target.is_open()) {
             cout << "Unable to open target: " << to_patch->PE_Name << endl;
@@ -313,12 +379,16 @@ int main(int argc, char* argv[])
         //launch target as suspended process
         STARTUPINFO sinfo; 
         PROCESS_INFORMATION pinfo;
+        MODULEINFO s;
         memset(&sinfo, 0, sizeof(STARTUPINFO));
         memset(&pinfo, 0, sizeof(PROCESS_INFORMATION));
         sinfo.cb = sizeof(STARTUPINFO);
         DWORD oldProt;
         size_t w_bytes;
         int w_count = 100;
+        UINT64 imgBase = 0;
+
+
         
         if (CreateProcessW(0, (LPWSTR)target_name.c_str(), 0, 0, 0, SSUSP, 0, 0, &sinfo, &pinfo) == 0) {
             cout << "Unable to open target: " << to_patch->PE_Name << endl;
@@ -326,31 +396,42 @@ int main(int argc, char* argv[])
             return -1;
         }
 
+       
         ResumeThread(pinfo.hThread);
 
+        imgBase = GetBaseAddress(pinfo.dwProcessId, (LPWSTR)target_name.c_str());
+
+        if (imgBase == 0) {
+            cout << "Unable to determine ImageBase During launch" << endl;
+            delete to_patch;
+            return -1;
+        }
+
         for (int p = 0; p < to_patch->patch_count; p++) {
-            cout << "Address: 0x" << std::hex << (0xFFFFFFFFFFFFFFFF & to_patch->file_offset[p])
+            cout << "Address: 0x" << std::hex << (0xFFFFFFFFFFFFFFFF & (imgBase + to_patch->file_offset[p]))
                 << " Patch: 0x" << std::hex << (0xFF & to_patch->org_byte[p]) << "->0x" << std::hex << (0xFF & to_patch->rep_byte[p]) << endl;
 
-            VirtualProtect((LPVOID)to_patch->file_offset[p], 0x01, PAGE_EXECUTE_READWRITE, &oldProt);
+            
+
+            VirtualProtectEx(pinfo.hProcess,(LPVOID)(imgBase + to_patch->file_offset[p]), 0x01, PAGE_EXECUTE_READWRITE, &oldProt);
             o_byte[0] = -1;
             w_count = 100;
             while (o_byte[0] != (char)to_patch->org_byte[p] && w_count > 0) {
-                ReadProcessMemory(pinfo.hProcess, (LPCVOID)to_patch->file_offset[p], &o_byte, 1, &w_bytes);
+                ReadProcessMemory(pinfo.hProcess,  (LPCVOID)(imgBase+to_patch->file_offset[p]), &o_byte, 1, &w_bytes);
                 w_count--;
-                Sleep(10);
+                Sleep(1);
             }
 
             if (o_byte[0] != (char)to_patch->org_byte[p] && !inArgs(argv,argc,"-f")) {
-                cout << "Original byte: " << std::hex << (0xFF & to_patch->org_byte[p]) << " not found at address: " << std::hex << (0xFFFFFFFFFFFFFFFF & to_patch->file_offset[p]) << endl;
+                cout << "Original byte: " << std::hex << (0xFF & to_patch->org_byte[p]) << " not found at address: " << std::hex << (0xFFFFFFFFFFFFFFFF & (imgBase+ to_patch->file_offset[p])) << "Got: " << std::hex << (0xFF & o_byte[0]) << endl;
                 delete to_patch;
                 return -1;
             }
 
             o_byte[0] = (char)to_patch->rep_byte[p];
-            WriteProcessMemory(pinfo.hProcess, (LPVOID)to_patch->file_offset[p], &o_byte, 1, &w_bytes);
+            WriteProcessMemory(pinfo.hProcess, (LPVOID)(imgBase + to_patch->file_offset[p]), &o_byte, 1, &w_bytes);
 
-            VirtualProtect((LPVOID)to_patch->file_offset[p], 0x01, oldProt, &oldProt);
+            VirtualProtectEx(pinfo.hProcess, (LPVOID)(imgBase + to_patch->file_offset[p]), 0x01, oldProt, &oldProt);
 
         }
 
