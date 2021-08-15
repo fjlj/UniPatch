@@ -10,6 +10,8 @@
 // bytes before patching with -la -lw -pa -pw respectively. You are able to provide an alternate exe to launch with -t
 // this allows targeting different modules within the program (presently only a single module is supported in 1337 parser)
 // 
+// //PS: its a bloody mess in here... 
+// 
 // Frank Lewis - fjlj - 08/01/2021
 
 #include <Windows.h>
@@ -21,16 +23,29 @@
 #include <tlhelp32.h> 
 #include <codecvt>
 
+
 #define SSUSP 0x00000004
 
 using namespace std;
 
-using convert_t = std::codecvt_utf8<wchar_t>;
-std::wstring_convert<convert_t, wchar_t> strconverter;
-
 std::wstring to_wstring(std::string str)
 {
+    std::wstring_convert<std::codecvt_utf8<wchar_t>, wchar_t> strconverter;
     return strconverter.from_bytes(str);
+}
+
+string leadingZero (UINT64 num) {
+        std::stringstream stream;
+        stream << (num < 16 ? "0" : "") << std::hex << (0xFF & num);
+    return stream.str();
+}
+
+void downcase(WCHAR* str) {
+    for (int i = 0; str[i] != '\0'; i += 2) {
+        if (str[i] >= 0x41 && str[i] <= 0x5A) {
+            str[i] = str[i] + 0x20;
+        }
+    }
 }
 
 UINT64 rvaToPa(UINT64 offsetRVA, PIMAGE_NT_HEADERS peHeader, LPVOID lpFileBase, bool loader_mode=false) {
@@ -61,6 +76,8 @@ class ArgShit {
 public:
     int i;
     wstring s;
+
+private:
     char** argv;
     int argc;
 
@@ -96,6 +113,15 @@ public:
         }
     }
 
+     char* getArg(int ind) {
+        if (ind < argc) {
+            return argv[ind];
+        }
+        else {
+            return 0;
+        }
+    }
+
     bool contains(const char *test){
         if (argc != 0 && argc > 2) {
             for (int i = 2; i < argc; i++) {
@@ -105,10 +131,18 @@ public:
             return false;
         }
         else {
-            false;
+            return false;
         }
     }
 
+    ArgShit() {
+        i = 0;
+        s = L"";
+    }
+
+    ~ArgShit() {};
+
+private:
     bool operator< (const int other)
     {
         return this->i < other;
@@ -117,14 +151,6 @@ public:
     bool operator> (const int other) {
         return this->i > other;
     };
-
-
-    ArgShit() {
-        i = 0;
-        s = L"";
-    }
-
-    ~ArgShit() {};
 
 };
 
@@ -150,11 +176,11 @@ void read1337(PE_Stuff *patch_info, ArgShit& arg_shit) {
     //variables to hold file handle and to receive line data
     fstream inFile;
     string lineRead;
-    inFile.open(arg_shit.argv[1]);
+    inFile.open(arg_shit.getArg(1));
 
     //if not able to open file fail with error
     if (!inFile.is_open()) {
-        cout << "Could not open file " << arg_shit.argv[1] << endl;
+        cout << "Could not open file " << arg_shit.getArg(1) << endl;
         patch_info->error = true;
         return;
     }
@@ -205,7 +231,7 @@ void read1337(PE_Stuff *patch_info, ArgShit& arg_shit) {
             }
             if (!arg_shit.contains("-l"))
                 cout << "PFO: 0x" << std::hex << patch_info->file_offset[tmp_patch_count];
-            cout << " Patch: 0x" << std::hex << patch_info->org_byte[tmp_patch_count] << "->" << "0x" << std::hex << patch_info->rep_byte[tmp_patch_count] << endl;
+            cout << " Patch: 0x" << leadingZero(patch_info->org_byte[tmp_patch_count]) << "->" << "0x" << leadingZero(patch_info->rep_byte[tmp_patch_count]) << endl;
 
             tmp_patch_count++;
             if (tmp_patch_count > 511) {
@@ -309,14 +335,6 @@ void read1337(PE_Stuff *patch_info, ArgShit& arg_shit) {
     return;
 }
 
-void downcase(WCHAR* str) {
-    for (int i = 0; str[i] != '\0'; i+=2) {
-        if (str[i] >= 0x41 && str[i] <= 0x5A) {
-            str[i] = str[i] + 0x20;
-        }
-    }
-}
-
 UINT64 GetBaseAddress(DWORD dwPID, WCHAR* name, int la, int lw)
 {
     HANDLE hModuleSnap = INVALID_HANDLE_VALUE;
@@ -399,7 +417,7 @@ int main(int argc, char* argv[])
         argShit->parseArg("-la");
         load_attempts = (argShit > 0 ? argShit->i : load_attempts);
     }
-
+ 
     if (argShit->contains("-lw")) {
         argShit->parseArg("-lw");
         load_wait = (argShit > 0 ? argShit->i : load_wait);
@@ -451,12 +469,12 @@ int main(int argc, char* argv[])
         for (int p = 0; p < to_patch->patch_count; p++) {
 
             cout << "Address: 0x" << std::hex << (0xFFFFFFFFFFFFFFFF & to_patch->file_offset[p])
-                << " Patch: 0x" << std::hex << (0xFF & to_patch->org_byte[p]) << "->0x" << std::hex << (0xFF & to_patch->rep_byte[p]) << endl;
+                << " Patch: 0x" << leadingZero(to_patch->org_byte[p]) << "->0x" << leadingZero(to_patch->rep_byte[p]) << endl;
 
             //read the original byte from file
             target.seekg(to_patch->file_offset[p]);
             target.read(o_byte, 1);
-            cout << "Read byte: 0x" << std::hex << (0xFF & o_byte[0]) << endl;
+            cout << "Read byte: 0x" << leadingZero(o_byte[0]) << endl;
 
             //error if the original byte does not match expected byte, unless -f flag specified
             if (o_byte[0] != (char)to_patch->org_byte[p] && !argShit->contains("-f")) {
@@ -474,7 +492,7 @@ int main(int argc, char* argv[])
             //read the new byte from file to confirm written successfully
             target.seekg(to_patch->file_offset[p]);
             target.read(o_byte, 1);
-            cout << "Wrote byte: 0x" << std::hex << (0xFF & o_byte[0]) << endl << endl;
+            cout << "Wrote byte: 0x" << leadingZero(o_byte[0]) << endl << endl;
         }
 
         cout << "Patch complete!!!" << endl;
@@ -487,15 +505,15 @@ int main(int argc, char* argv[])
     else {
         //loader mode
 
-        wstring target_name;
+        wstring exe_name;
         wstring patch_target;
         if (argShit->contains("-t")) {
             argShit->parseArg("-t");
-            target_name = argShit->s;
+            exe_name = argShit->s;
             patch_target = to_wstring(to_patch->PE_Name);
         }
         else {
-            patch_target = target_name = to_wstring(to_patch->PE_Name);
+            patch_target = exe_name = to_wstring(to_patch->PE_Name);
         }
 
         //launch target as suspended process
@@ -511,8 +529,8 @@ int main(int argc, char* argv[])
 
 
         
-        if (CreateProcessW(0, (LPWSTR)target_name.c_str(), 0, 0, 0, SSUSP, 0, 0, &sinfo, &pinfo) == 0) {
-            cout << "Unable to open target: " << target_name.c_str() << endl;
+        if (CreateProcessW(0, (LPWSTR)exe_name.c_str(), 0, 0, 0, SSUSP, 0, 0, &sinfo, &pinfo) == 0) {
+            cout << "Unable to open target: " << exe_name.c_str() << endl;
             delete to_patch;
             delete argShit;
             return -1;
@@ -532,7 +550,7 @@ int main(int argc, char* argv[])
 
         for (int p = 0; p < to_patch->patch_count; p++) {
             cout << "Address: 0x" << std::hex << (0xFFFFFFFFFFFFFFFF & (imgBase + to_patch->file_offset[p]))
-                << " Patch: 0x" << std::hex << (0xFF & to_patch->org_byte[p]) << "->0x" << std::hex << (0xFF & to_patch->rep_byte[p]) << endl;
+                << " Patch: 0x" << leadingZero(to_patch->org_byte[p]) << "->0x" << leadingZero(to_patch->rep_byte[p]) << endl;
 
             
 
@@ -546,9 +564,9 @@ int main(int argc, char* argv[])
             }
 
             if (o_byte[0] != (char)to_patch->org_byte[p] && !argShit->contains("-f")) {
-                cout << "Original byte: " << std::hex << (0xFF & to_patch->org_byte[p]) 
+                cout << "Original byte: " << leadingZero(to_patch->org_byte[p])
                      << " not found at address: " << std::hex << (0xFFFFFFFFFFFFFFFF & (imgBase+ to_patch->file_offset[p])) 
-                     << " Got: " << std::hex << (0xFF & o_byte[0]) << endl;
+                     << " Got: " << leadingZero(o_byte[0]) << endl;
                 delete to_patch;
                 delete argShit;
                 return -1;
