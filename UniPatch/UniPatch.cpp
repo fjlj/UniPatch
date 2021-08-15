@@ -19,10 +19,19 @@
 #include <string>
 #include <sstream>
 #include <tlhelp32.h> 
+#include <codecvt>
 
 #define SSUSP 0x00000004
 
 using namespace std;
+
+using convert_t = std::codecvt_utf8<wchar_t>;
+std::wstring_convert<convert_t, wchar_t> strconverter;
+
+std::wstring to_wstring(std::string str)
+{
+    return strconverter.from_bytes(str);
+}
 
 UINT64 rvaToPa(UINT64 offsetRVA, PIMAGE_NT_HEADERS peHeader, LPVOID lpFileBase, bool loader_mode=false) {
     PIMAGE_SECTION_HEADER sectionHeader = IMAGE_FIRST_SECTION(peHeader);
@@ -75,21 +84,21 @@ public:
     void parseArg(const char* find) {
         i = 0;
         s = L"";
-        if (argc != 0) {
+        if (argc != 0 && argc > 3) {
             stringstream conv;
-            for (int o = 0; o < argc; o++) {
+            for (int o = 2; o < argc; o++) {
                 if (strcmp(argv[o], find) == 0 && (o + 1 < argc) && strlen(argv[o + 1]) > 0) {
                     conv << argv[o + 1];
                     conv >> i;
-                    s = wstring(conv.str().begin(), conv.str().end());
+                    s = to_wstring(conv.str());
                 }
             }
         }
     }
 
     bool contains(const char *test){
-        if (argc != 0) {
-            for (int i = 0; i < argc; i++) {
+        if (argc != 0 && argc > 2) {
+            for (int i = 2; i < argc; i++) {
                 if (strcmp(argv[i], test) == 0)
                     return true;
             }
@@ -362,16 +371,16 @@ UINT64 GetBaseAddress(DWORD dwPID, WCHAR* name, int la, int lw)
 int main(int argc, char* argv[])
 {
 
-    ArgShit argShit(argv, argc);
+    ArgShit *argShit = new ArgShit(argv, argc);
 
     //TODO: update loader mode to take a processname (in the case that the target is a dll used by X process)
-    if (argc < 2 || argShit.contains("-h")) {
+    if (argc < 2 || argShit->contains("-h")) {
         cout << "Usage: UniPatch.exe <1337_file_path> [options]" << endl
-            << "\t-h\tDisplay this help screen" << endl
-            << "\t-nb\tDo not Backup Target" << endl
-            << "\t-r\tTreat addresses as file offsets" << endl
-            << "\t-f\tForce patch" << endl
-            << "\t-l\tLoader Mode: patch bytes in memory(no file modification) after launching target (implies -nb)" << endl
+            << "\t-h\t\tDisplay this help screen" << endl
+            << "\t-nb\t\tDo not Backup Target" << endl
+            << "\t-r\t\tTreat addresses as file offsets" << endl
+            << "\t-f\t\tForce patch" << endl
+            << "\t-l\t\tLoader Mode: patch bytes in memory(no file modification) after launching target (implies -nb)" << endl
             << "\t-t <exe name>\tTarget exe (if unused defaults to target of 1337 file)" << endl
             << "\t-la <number>\tNumber of times to attempt to load Module data from memory (default:2000)" << endl
             << "\t-lw <number>\tNumber of miliseconds to wait between attempts (default:1)" << endl
@@ -386,30 +395,30 @@ int main(int argc, char* argv[])
     int patch_attempts = 200;
     int patch_wait = 1;
 
-    if (argShit.contains("-la")) {
-        argShit.parseArg("-la");
-        load_attempts = (argShit > 0 ? argShit.i : load_attempts);
+    if (argShit->contains("-la")) {
+        argShit->parseArg("-la");
+        load_attempts = (argShit > 0 ? argShit->i : load_attempts);
     }
 
-    if (argShit.contains("-lw")) {
-        argShit.parseArg("-lw");
-        load_wait = (argShit > 0 ? argShit.i : load_wait);
+    if (argShit->contains("-lw")) {
+        argShit->parseArg("-lw");
+        load_wait = (argShit > 0 ? argShit->i : load_wait);
     }
 
-    if (argShit.contains("-pa")) {
-        argShit.parseArg("-pa");
-        patch_attempts = (argShit > 0 ? argShit.i : patch_attempts);
+    if (argShit->contains("-pa")) {
+        argShit->parseArg("-pa");
+        patch_attempts = (argShit > 0 ? argShit->i : patch_attempts);
     }
 
-    if (argShit.contains("-pw")) {
-        argShit.parseArg("-pw");
-        patch_wait = (argShit > 0 ? argShit.i : patch_wait);
+    if (argShit->contains("-pw")) {
+        argShit->parseArg("-pw");
+        patch_wait = (argShit > 0 ? argShit->i : patch_wait);
     }
 
 
     //attempt to open and read 1337 file
     PE_Stuff* to_patch = new PE_Stuff;
-    read1337(to_patch, argShit);
+    read1337(to_patch, *argShit);
 
     if (to_patch->error) {
         delete to_patch;
@@ -422,10 +431,10 @@ int main(int argc, char* argv[])
 
     cout << "Read " << std::dec << to_patch->patch_count << " patches." << endl << endl << "Beginning patching Process" << endl;
 
-    if (!argShit.contains("-l")) {
+    if (!argShit->contains("-l")) {
         //open target file
 
-        if (!argShit.contains("-nb")) {
+        if (!argShit->contains("-nb")) {
             CopyFileA(to_patch->PE_Name.c_str(), (to_patch->PE_Name + ".UniBak").c_str(), false);
         }
 
@@ -448,7 +457,7 @@ int main(int argc, char* argv[])
             cout << "Read byte: 0x" << std::hex << (0xFF & o_byte[0]) << endl;
 
             //error if the original byte does not match expected byte, unless -f flag specified
-            if (o_byte[0] != (char)to_patch->org_byte[p] && !argShit.contains("-f")) {
+            if (o_byte[0] != (char)to_patch->org_byte[p] && !argShit->contains("-f")) {
                 cout << "Original byte mismatch, perhaps already patched, or version differs, use -f to force patching. " << endl;
                 delete to_patch;
                 return -1;
@@ -477,13 +486,13 @@ int main(int argc, char* argv[])
 
         wstring target_name;
         wstring patch_target;
-        if (argShit.contains("-t")) {
-            argShit.parseArg("-t");
-            target_name = argShit.s;
-            patch_target = wstring(to_patch->PE_Name.begin(), to_patch->PE_Name.end());
+        if (argShit->contains("-t")) {
+            argShit->parseArg("-t");
+            target_name = argShit->s;
+            patch_target = to_wstring(to_patch->PE_Name);
         }
         else {
-            patch_target = target_name = wstring(to_patch->PE_Name.begin(), to_patch->PE_Name.end());
+            patch_target = target_name = to_wstring(to_patch->PE_Name);
         }
 
         //launch target as suspended process
@@ -531,7 +540,7 @@ int main(int argc, char* argv[])
                 Sleep(patch_wait);
             }
 
-            if (o_byte[0] != (char)to_patch->org_byte[p] && !argShit.contains("-f")) {
+            if (o_byte[0] != (char)to_patch->org_byte[p] && !argShit->contains("-f")) {
                 cout << "Original byte: " << std::hex << (0xFF & to_patch->org_byte[p]) << " not found at address: " << std::hex << (0xFFFFFFFFFFFFFFFF & (imgBase+ to_patch->file_offset[p])) << "Got: " << std::hex << (0xFF & o_byte[0]) << endl;
                 delete to_patch;
                 return -1;
