@@ -422,6 +422,7 @@ int main(int argc, char* argv[])
 
     if (to_patch->error) {
         delete to_patch;
+        delete argShit;
         return -1;
     }
 
@@ -442,6 +443,7 @@ int main(int argc, char* argv[])
         if (!target.is_open()) {
             cout << "Unable to open target: " << to_patch->PE_Name << endl;
             delete to_patch;
+            delete argShit;
             return -1;
         }
 
@@ -460,6 +462,7 @@ int main(int argc, char* argv[])
             if (o_byte[0] != (char)to_patch->org_byte[p] && !argShit->contains("-f")) {
                 cout << "Original byte mismatch, perhaps already patched, or version differs, use -f to force patching. " << endl;
                 delete to_patch;
+                delete argShit;
                 return -1;
             }
 
@@ -511,6 +514,7 @@ int main(int argc, char* argv[])
         if (CreateProcessW(0, (LPWSTR)target_name.c_str(), 0, 0, 0, SSUSP, 0, 0, &sinfo, &pinfo) == 0) {
             cout << "Unable to open target: " << target_name.c_str() << endl;
             delete to_patch;
+            delete argShit;
             return -1;
         }
 
@@ -522,6 +526,7 @@ int main(int argc, char* argv[])
         if (imgBase == 0) {
             cout << "Unable to determine ImageBase During launch" << endl;
             delete to_patch;
+            delete argShit;
             return -1;
         }
 
@@ -541,8 +546,11 @@ int main(int argc, char* argv[])
             }
 
             if (o_byte[0] != (char)to_patch->org_byte[p] && !argShit->contains("-f")) {
-                cout << "Original byte: " << std::hex << (0xFF & to_patch->org_byte[p]) << " not found at address: " << std::hex << (0xFFFFFFFFFFFFFFFF & (imgBase+ to_patch->file_offset[p])) << "Got: " << std::hex << (0xFF & o_byte[0]) << endl;
+                cout << "Original byte: " << std::hex << (0xFF & to_patch->org_byte[p]) 
+                     << " not found at address: " << std::hex << (0xFFFFFFFFFFFFFFFF & (imgBase+ to_patch->file_offset[p])) 
+                     << " Got: " << std::hex << (0xFF & o_byte[0]) << endl;
                 delete to_patch;
+                delete argShit;
                 return -1;
             }
 
@@ -558,5 +566,6 @@ int main(int argc, char* argv[])
 
     cout << "Cleaning up..." << endl;
     delete to_patch;
+    delete argShit;
     cout << "Done... Good Bye" << endl;
 }
