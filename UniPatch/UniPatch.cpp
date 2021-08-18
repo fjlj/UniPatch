@@ -401,7 +401,6 @@ int main(int argc, char* argv[])
             << "\t-f\t\tForce patch (ignore original bytes in patch mode)" << endl
             << "\t-l\t\tLoader Mode: patch bytes in memory(no file modification) after launching target (implies -nb)" << endl
             << "\t-t <exe name>\tTarget exe (if unused defaults to target of 1337 file)" << endl
-            << "\t-sw <number>\tNumber of miliseconds to wait before initial module snapshot(allow all modules to load)" << endl
             << "\t-la <number>\tNumber of times to attempt to load Module data from memory (default:2000)" << endl
             << "\t-lw <number>\tNumber of miliseconds to wait between attempts (default:1)" << endl
             << "\t-pa <number>\tNumber of times to attempt to check original byte before patching (default:200)" << endl
