@@ -143,7 +143,11 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="ArgShit.cpp" />
     <ClCompile Include="UniPatch.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="ArgShit.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
