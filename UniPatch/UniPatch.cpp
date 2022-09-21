@@ -26,23 +26,24 @@
 constexpr auto SSUSP = 0x00000004;
 
 struct Module {
-	int patch_count = 0;
-	std::string PE_Name = "";
+	uint64_t patch_count = 0;
 	uint64_t rva_offset[512], file_offset[512] = { 0 };
 	uint64_t org_byte[512], rep_byte[512] = { 0 };
+	std::string PE_Name[FILENAME_MAX+1] = { "" };
 };
 
 struct PE_Stuff {
 	//patch variables
-	Module *mods = new Module[16];
-	int total_patches = 0;
+	Module* mods = new Module[64];
+	uint64_t total_patches = 0;
 	int module_count = 0;
 	int snap_wait = 0;
 	int load_attempts = 2000;
-	int load_wait = 1;
 	int patch_attempts = 200;
-	int patch_wait = 1;
+	DWORD load_wait = 1;
+	DWORD patch_wait = 1;
 	bool error = false;
+	unsigned char padding[7] = { 0 };
 
 	~PE_Stuff() {
 		if (mods) delete[] mods;
@@ -50,7 +51,7 @@ struct PE_Stuff {
 	}
 };
 
-uint64_t rvaToPa(uint64_t offsetRVA, PIMAGE_NT_HEADERS peHeader, LPVOID lpFileBase, bool loader_mode = false) {
+uint64_t rvaToPa(uint64_t offsetRVA, PIMAGE_NT_HEADERS peHeader, LPVOID lpFileBase){ //, bool loader_mode = false) {
 	PIMAGE_SECTION_HEADER sectionHeader = IMAGE_FIRST_SECTION(peHeader);
 	uint64_t nSectionCount = peHeader->FileHeader.NumberOfSections;
 	uint64_t i = 0;
@@ -67,7 +68,7 @@ uint64_t rvaToPa(uint64_t offsetRVA, PIMAGE_NT_HEADERS peHeader, LPVOID lpFileBa
 	if (i > nSectionCount)
 	{
 		sectionHeader = IMAGE_FIRST_SECTION(peHeader);
-		uint64_t nSectionCount = peHeader->FileHeader.NumberOfSections;
+		nSectionCount = peHeader->FileHeader.NumberOfSections;
 		for (i = 0; i < nSectionCount - 1; ++i, ++sectionHeader);
 	}
 
@@ -100,10 +101,10 @@ void read1337(PE_Stuff* patch_info, ArgShit& arg_shit) {
 	}
 
 	//variables for state of loading 1337 file and getting RVAs and BYTES
-	bool exe_line_read = false;
+	//bool exe_line_read = false;
 	std::stringstream conv_me;
 	size_t add_splitPos, byte_split = 0;
-	int tmp_patch_count = 0;
+	uint64_t tmp_patch_count = 0;
 	int tmp_module_count = -1; //to be sure it matches when adding patches to each module 
 
 	while (getline(inFile, lineRead)) {
@@ -116,7 +117,7 @@ void read1337(PE_Stuff* patch_info, ArgShit& arg_shit) {
 		if (lineRead[0] == '>') {
 			
 			//write patch count to completed module index and add patch_count to total_patches...
-			//if we have been here before (first iterration is -1 at this poing)
+			//if we have been here before (first iterration is -1 at this point)
 			if (tmp_module_count >= 0) {
 				patch_info->mods[tmp_module_count].patch_count = tmp_patch_count;
 				patch_info->total_patches += tmp_patch_count;
@@ -127,26 +128,26 @@ void read1337(PE_Stuff* patch_info, ArgShit& arg_shit) {
 			tmp_patch_count = 0;
 			
 			//get the target PE name from the 1337 file
-			patch_info->mods[tmp_module_count].PE_Name = lineRead.substr(1, lineRead.length());
-			std::cout << "Target File: " << patch_info->mods[tmp_module_count].PE_Name << std::endl;
+			*patch_info->mods[tmp_module_count].PE_Name = lineRead.substr(1, lineRead.length());
+			std::cout << "Target File: " << *patch_info->mods[tmp_module_count].PE_Name << std::endl;
 			if (!arg_shit.contains("-r") && !arg_shit.contains("-l")) {
 				std::cout << "Processing .1337 file RVA offsets, USE -r to treat addresses as file offsets." << std::endl;
 				//get a handle to the file and open for reading...
-				hFile = CreateFileA((patch_info->mods[tmp_module_count].PE_Name).c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+				hFile = CreateFileA((*patch_info->mods[tmp_module_count].PE_Name).c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
 
 				//exit if failed
 				if (hFile == INVALID_HANDLE_VALUE)
 				{
-					std::cout << "Unable to read file: " << patch_info->mods[tmp_module_count].PE_Name << std::endl;
+					std::cout << "Unable to read file: " << *patch_info->mods[tmp_module_count].PE_Name << std::endl;
 					patch_info->error = true;
 					return;
 				}
 
 				//map the file to PE struct
-				hFileMapping = CreateFileMapping(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+				hFileMapping = CreateFileMappingW(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
 
 				//exit if failed
-				if (hFileMapping == 0)
+				if (!hFileMapping)
 				{
 					std::cout << "CreateFileMapping failed" << std::endl;
 					CloseHandle(hFile);
@@ -158,7 +159,7 @@ void read1337(PE_Stuff* patch_info, ArgShit& arg_shit) {
 				lpFileBase = MapViewOfFile(hFileMapping, FILE_MAP_READ, 0, 0, 0);
 
 				//exit if failed
-				if (lpFileBase == 0)
+				if (!lpFileBase)
 				{
 					std::cout << "MapViewOfFile failed" << std::endl;
 					CloseHandle(hFileMapping);
@@ -261,32 +262,33 @@ void read1337(PE_Stuff* patch_info, ArgShit& arg_shit) {
 }
 
 //Return the image base of given module name
-uint64_t GetBaseAddress(PROCESS_INFORMATION process, WCHAR* name, int la, int lw)
+uint64_t GetBaseAddress(PROCESS_INFORMATION process, WCHAR* name, int la, DWORD lw)
 {
 	//a different approach that allows snapping very quickly between resume/suspend... much more reliable...
 	int attempts = 0;
 	HMODULE hMods[1024];
 	DWORD cbNeeded;
-	unsigned int i, snap_ret;
+	unsigned int i;
+	bool snap_ret;
 
 	while (attempts < la) {
 		if (attempts % 100 == 0) std::cout << "Scanning for Modules...: " << std::dec << (int)(((float)attempts / (float)la) * 100) << "%" << std::endl;
 
 		// resume momentarily Get a list of all the modules in this process.
 		ResumeThread(process.hThread);
-		snap_ret = EnumProcessModulesEx(process.hProcess, hMods, sizeof(hMods), &cbNeeded, LIST_MODULES_ALL);
+		snap_ret = K32EnumProcessModulesEx(process.hProcess, hMods, sizeof(hMods), &cbNeeded, LIST_MODULES_ALL);
 		
 		//suspend after snap.
 		SuspendThread(process.hThread);
 
 		//process valid snap...
-		if (snap_ret != 0)
+		if (snap_ret)
 		{
 			for (i = 0; i < (cbNeeded / sizeof(HMODULE)); i++)
 			{
 				//get full path + module name of modules in snap
-				TCHAR szModName[MAX_PATH];
-				if (GetModuleFileNameEx(process.hProcess, hMods[i], szModName, sizeof(szModName) / sizeof(TCHAR)))
+				WCHAR szModName[MAX_PATH];
+				if (K32GetModuleFileNameExW(process.hProcess, hMods[i], szModName, sizeof(szModName) / sizeof(WCHAR)))
 				{
 					// check for matching module, return its base if found...
 					if (wcsstr(szModName, name)) {
@@ -331,25 +333,25 @@ int main(int argc, char* argv[])
 	PE_Stuff* patch_info = new PE_Stuff;
 
 	
-	//get loader timing variables from args if supplied (likely no ever needed)
+	//get loader timing variables from args if supplied (likely not ever needed)
 	if (argShit->contains("-la")) {
 		argShit->parseArg("-la");
-		patch_info->load_attempts = (argShit > 0 ? argShit->getInt() : patch_info->load_attempts);
+		patch_info->load_attempts = (argShit != nullptr ? argShit->getInt() : patch_info->load_attempts);
 	}
 
 	if (argShit->contains("-lw")) {
 		argShit->parseArg("-lw");
-		patch_info->load_wait = (argShit > 0 ? argShit->getInt() : patch_info->load_wait);
+		patch_info->load_wait = (argShit != nullptr ? argShit->getInt() : patch_info->load_wait);
 	}
 
 	if (argShit->contains("-pa")) {
 		argShit->parseArg("-pa");
-		patch_info->patch_attempts = (argShit > 0 ? argShit->getInt() : patch_info->patch_attempts);
+		patch_info->patch_attempts = (argShit != nullptr ? argShit->getInt() : patch_info->patch_attempts);
 	}
 
 	if (argShit->contains("-pw")) {
 		argShit->parseArg("-pw");
-		patch_info->patch_wait = (argShit > 0 ? argShit->getInt() : patch_info->patch_wait);
+		patch_info->patch_wait = (argShit != nullptr ? argShit->getInt() : patch_info->patch_wait);
 	}
 
 	//attempt to open and parse 1337 file
@@ -373,32 +375,32 @@ int main(int argc, char* argv[])
 		for (int module_ind = 0; module_ind < patch_info->module_count; module_ind++) {
 
 			if (!argShit->contains("-nb")) {
-				CopyFileA(patch_info->mods[module_ind].PE_Name.c_str(), (patch_info->mods[module_ind].PE_Name + ".UniBak").c_str(), false);
+				CopyFileA((*patch_info->mods[module_ind].PE_Name).c_str(), (*patch_info->mods[module_ind].PE_Name + ".UniBak").c_str(), false);
 			}
 
-			target.open(patch_info->mods[module_ind].PE_Name, std::ios_base::binary | std::ios_base::out | std::ios_base::in);
+			target.open(*patch_info->mods[module_ind].PE_Name, std::ios_base::binary | std::ios_base::out | std::ios_base::in);
 			if (!target.is_open()) {
-				std::cout << "Unable to open target: " << patch_info->mods[module_ind].PE_Name << std::endl;
+				std::cout << "Unable to open target: " << *patch_info->mods[module_ind].PE_Name << std::endl;
 				delete patch_info;
 				delete argShit;
 				return -1;
 			}
 
-			std::cout << "Module: " << patch_info->mods[module_ind].PE_Name << std::endl;
+			std::cout << "Module: " << *patch_info->mods[module_ind].PE_Name << std::endl;
 
 			//apply patches to binary file
-			for (int p = 0; p < patch_info->mods[module_ind].patch_count; p++) {
+			for (uint64_t p = 0; p < patch_info->mods[module_ind].patch_count; p++) {
 				std::cout << "Address: 0x" << std::hex << (0xFFFFFFFFFFFFFFFF & patch_info->mods[module_ind].file_offset[p])
 					<< " Patch: 0x" << leadingZero(patch_info->mods[module_ind].org_byte[p]) << "->0x" << leadingZero(patch_info->mods[module_ind].rep_byte[p]) << std::endl;
 
 				//read the original byte from file
-				target.seekg(patch_info->mods[module_ind].file_offset[p]);
+				target.seekg((std::streamoff)patch_info->mods[module_ind].file_offset[p]);
 				target.read(o_byte, 1);
 				//std::cout << "Read byte: 0x" << leadingZero(o_byte[0]) << std::endl;
 
 				//error if the original byte does not match expected byte, unless -f flag specified
 				if (o_byte[0] != (char)patch_info->mods[module_ind].org_byte[p] && !argShit->contains("-f")) {
-					std::cout << "Original byte mismatch, perhaps already patched, or version differs. GOT: 0x" << leadingZero(o_byte[0]) << " Expected: 0x" << leadingZero((char)patch_info->mods[module_ind].org_byte[p])  << std::endl 
+					std::cout << "Original byte mismatch, perhaps already patched, or version differs. GOT: 0x" << leadingZero((uint64_t)o_byte[0]) << " Expected: 0x" << leadingZero((uint64_t)(char)patch_info->mods[module_ind].org_byte[p])  << std::endl 
 						      << "Use -f to force patching. " << std::endl;
 					delete patch_info;
 					delete argShit;
@@ -406,17 +408,17 @@ int main(int argc, char* argv[])
 				}
 
 				//patch the original byte with the new byte
-				target.seekp(patch_info->mods[module_ind].file_offset[p]);
+				target.seekp((std::streamoff)patch_info->mods[module_ind].file_offset[p]);
 				o_byte[0] = (char)patch_info->mods[module_ind].rep_byte[p];
 				target.write(o_byte, 1);
 
 				//read the new byte from file to confirm written successfully
-				target.seekg(patch_info->mods[module_ind].file_offset[p]);
+				target.seekg((std::streamoff)patch_info->mods[module_ind].file_offset[p]);
 				target.read(o_byte, 1);
 				//I can't think of a situation other than invalid permissions or file in use that this would happen.
 				//also I am pretty sure an error would have been thrown already...
 				if (o_byte[0] != (char)patch_info->mods[module_ind].rep_byte[p]) {
-					std::cout << "Unable to write byte 0x" << leadingZero((char)patch_info->mods[module_ind].org_byte[p]) << " To address: 0x" << leadingZero(patch_info->mods[module_ind].file_offset[p]) << std::endl
+					std::cout << "Unable to write byte 0x" << leadingZero((uint64_t)((char)patch_info->mods[module_ind].org_byte[p])) << " To address: 0x" << leadingZero(patch_info->mods[module_ind].file_offset[p]) << std::endl
 							  << "Perhaps the file is in use, or you do not have permission to edit the file. " << std::endl;
 					delete patch_info;
 					delete argShit;
@@ -424,7 +426,7 @@ int main(int argc, char* argv[])
 				}
 			}
 
-			std::cout << patch_info->mods[module_ind].PE_Name << " - Patch complete!!!" << std::endl;
+			std::cout << *patch_info->mods[module_ind].PE_Name << " - Patch complete!!!" << std::endl;
 
 			//close files.
 			if (target.is_open())
@@ -439,11 +441,11 @@ int main(int argc, char* argv[])
 		std::wstring patch_target;
 
 		//launch target as suspended process
-		STARTUPINFO sinfo;
+		STARTUPINFOW sinfo;
 		PROCESS_INFORMATION pinfo;
-		memset(&sinfo, 0, sizeof(STARTUPINFO));
+		memset(&sinfo, 0, sizeof(STARTUPINFOW));
 		memset(&pinfo, 0, sizeof(PROCESS_INFORMATION));
-		sinfo.cb = sizeof(STARTUPINFO);
+		sinfo.cb = sizeof(STARTUPINFOW);
 		DWORD oldProt;
 		size_t w_bytes;
 		int w_count = 200;
@@ -457,7 +459,7 @@ int main(int argc, char* argv[])
 			exe_name = argShit->getString();
 		}
 		else {
-			exe_name = to_wstring(patch_info->mods[0].PE_Name);
+			exe_name = to_wstring(*patch_info->mods[0].PE_Name);
 		}
 
 		if (CreateProcessW(0, (LPWSTR)exe_name.c_str(), 0, 0, 0, SSUSP, 0, 0, &sinfo, &pinfo) == 0) {
@@ -468,7 +470,7 @@ int main(int argc, char* argv[])
 		}
 
 		while (mod_ind < patch_info->module_count) {
-				patch_target = to_wstring(patch_info->mods[mod_ind].PE_Name);
+				patch_target = to_wstring(*patch_info->mods[mod_ind].PE_Name);
 
 			//snag the image base of the module once loaded.
 			imgBase = GetBaseAddress(pinfo, (WCHAR*)patch_target.c_str(), patch_info->load_attempts, patch_info->load_wait);
@@ -481,7 +483,7 @@ int main(int argc, char* argv[])
 				return -1;
 			}
 
-			for (int p = 0; p < patch_info->mods[mod_ind].patch_count; p++) {
+			for (uint64_t p = 0; p < patch_info->mods[mod_ind].patch_count; p++) {
 				VirtualProtectEx(pinfo.hProcess, (LPVOID)(imgBase + patch_info->mods[mod_ind].file_offset[p]), 0x01, PAGE_EXECUTE_READWRITE, &oldProt);
 				o_byte[0] = -1;
 				w_count = patch_info->patch_attempts;
@@ -503,7 +505,7 @@ int main(int argc, char* argv[])
 				if (!b_test && !argShit->contains("-f")) {
 					std::cout << "Original byte: " << leadingZero(patch_info->mods[mod_ind].org_byte[p])
 						<< " not found at address: " << std::hex << (0xFFFFFFFFFFFFFFFF & (imgBase + patch_info->mods[mod_ind].file_offset[p]))
-						<< " Got: " << leadingZero(o_byte[0]) << ", Use -f to force patching anyway" << std::endl;
+						<< " Got: " << leadingZero((uint64_t)o_byte[0]) << ", Use -f to force patching anyway" << std::endl;
 					TerminateProcess(pinfo.hProcess, 0);
 					delete patch_info;
 					delete argShit;

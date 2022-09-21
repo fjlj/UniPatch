@@ -31,8 +31,4 @@ public:
 
 	std::wstring getString();
 
-private:
-	bool operator< (const int other);
-
-	bool operator> (const int other);
 };

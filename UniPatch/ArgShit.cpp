@@ -1,4 +1,3 @@
-#pragma once
 #include "ArgShit.h"
 
 std::wstring to_wstring(std::string str)
@@ -85,12 +84,3 @@ std::wstring ArgShit::getString()
 {
 	return this->s;
 }
-
-bool ArgShit::operator< (const int other)
-{
-	return this->i < other;
-}
-
-bool ArgShit::operator> (const int other) {
-	return this->i > other;
-};
