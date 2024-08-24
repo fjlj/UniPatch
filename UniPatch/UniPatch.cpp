@@ -23,6 +23,10 @@
 #include <fstream>
 #include <psapi.h>
 
+#pragma comment(lib,"ntdll.lib")
+EXTERN_C NTSTATUS NTAPI NtSuspendProcess(IN HANDLE ProcessHandle);
+EXTERN_C NTSTATUS NTAPI NtResumeProcess(IN HANDLE ProcessHandle);
+
 constexpr auto SSUSP = 0x00000004;
 
 struct Module {
@@ -492,6 +496,7 @@ int main(int argc, char* argv[])
 
 				//do while is one iteration faster... at ending the loop
 				do {
+					NtResumeProcess(pinfo.hProcess);
 					ReadProcessMemory(pinfo.hProcess, (LPCVOID)(imgBase + patch_info->mods[mod_ind].file_offset[p]), &o_byte, 1, &w_bytes);
 					b_test = o_byte[0] == (char)patch_info->mods[mod_ind].org_byte[p];
 					w_count--;
@@ -499,6 +504,7 @@ int main(int argc, char* argv[])
 						Sleep(patch_info->patch_wait);
 						if (w_count % 20 == 0) std::cout << "Patch scanning... " << std::dec << (int)((float)(w_count_o-w_count)/(float)(w_count_o) * 100.0f) << "%" << std::endl;
 					}
+					NtSuspendProcess(pinfo.hProcess);
 				} while (!b_test && w_count > 0);
 
 				//error and exit if original byte does not match and -f was not used.
@@ -523,7 +529,9 @@ int main(int argc, char* argv[])
 			}
 			mod_ind++;
 		}
-		ResumeThread(pinfo.hThread);
+		NtResumeProcess(pinfo.hProcess);
+		CloseHandle(pinfo.hProcess);
+		CloseHandle(pinfo.hThread);
 	}
 
 	std::cout << "Cleaning up..." << std::endl;
