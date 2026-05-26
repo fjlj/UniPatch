@@ -144,11 +144,11 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="ArgShit.cpp" />
     <ClCompile Include="UniPatch.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ArgShit.h" />
+    <ClInclude Include="UniPatchEngine.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
