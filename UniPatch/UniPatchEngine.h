@@ -58,6 +58,7 @@ namespace UniPatch {
 	bool Parse1337(const char* filepath, PatchConfig& config);
 	bool ApplyPatchesToDisk(const PatchConfig& config);
 	bool LaunchAndPatchMemory(const PatchConfig& config);
+	bool ApplyPatchesInline(const PatchConfig& config);
 
 } // namespace UniPatch
 
@@ -307,6 +308,74 @@ namespace UniPatch {
 			}
 		}
 		NtResumeProcess(pinfo.hProcess); CloseHandle(pinfo.hProcess); CloseHandle(pinfo.hThread); 
+		return true;
+	}
+
+	bool ApplyPatchesInline(const PatchConfig& config) {
+		if(config.modules.empty()) return false;
+
+		DWORD oldProt;
+
+		for(const auto& mod : config.modules) {
+			// Wait for the module to be loaded by the host process.
+			HMODULE hModule = NULL;
+			int attempts = 0;
+			while(attempts < config.load_attempts) {
+				hModule = GetModuleHandleA(mod.target_name.c_str());
+				if(hModule != NULL) break;
+				Sleep(config.load_wait);
+				attempts++;
+			}
+
+			if(hModule == NULL) {
+				std::cout << "Module " << mod.target_name << " not found in current process." << std::endl;
+				return false;
+			}
+
+			uint64_t imgBase = (uint64_t)hModule;
+
+			for(const auto& patch : mod.patches) {
+				// In memory, sections aren't mapped as raw files, they are mapped by RVA.
+				// Since our parser already sets file_offset = rva_offset when raw_offsets/loader_mode 
+				// are active, we can just add it directly to the Image Base.
+				void* targetAddr = (void*)(imgBase + patch.file_offset);
+
+				VirtualProtect(targetAddr, 1, PAGE_EXECUTE_READWRITE, &oldProt);
+
+				int w_count = config.patch_attempts;
+				bool b_test = false;
+				char current_byte = 0;
+
+				// Wait loop in case the target uses a packer/crypter that hasn't decrypted the byte yet
+				do {
+					current_byte = *(char*)targetAddr; // Direct memory read!
+					b_test = (current_byte == (char)patch.org_byte);
+					w_count--;
+
+					if(!b_test) {
+						Sleep(config.patch_wait);
+					}
+				} while(!b_test && w_count > 0);
+
+				if(!b_test && !config.force_patch) {
+					std::cout << "Original byte not found at 0x" << std::hex << (uint64_t)targetAddr << ". Use force_patch to bypass." << std::endl;
+					VirtualProtect(targetAddr, 1, oldProt, &oldProt);
+					return false;
+				}
+
+				// Direct memory edit!
+				*(char*)targetAddr = (char)patch.rep_byte;
+
+				// Restore protection
+				VirtualProtect(targetAddr, 1, oldProt, &oldProt);
+
+				// CRITICAL FOR INLINE PATCHING: Flush the CPU instruction cache
+				FlushInstructionCache(GetCurrentProcess(), targetAddr, 1);
+
+				std::cout << "Inline Patched Address: 0x" << std::hex << (uint64_t)targetAddr
+					<< " | 0x" << leadingZero(patch.org_byte) << "->0x" << leadingZero(patch.rep_byte) << std::endl;
+			}
+		}
 		return true;
 	}
 } // namespace UniPatch
